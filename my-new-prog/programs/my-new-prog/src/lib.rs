@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
-
 use anchor_lang::solana_program::system_instruction;
-use switchboard_on_demand::accounts::RandomnessAccountData; // For system program CPI
+use switchboard_on_demand::accounts::RandomnessAccountData;
+use bytemuck::{Pod, Zeroable}; // Add these imports
 
 pub mod errors;
 pub mod events;
@@ -24,98 +24,87 @@ pub mod my_new_prog {
 
     pub fn initialize_contract(
         ctx: Context<InitializeContract>,
-        _max_bet_config: u64, // Renamed to `_max_bet_config` to indicate it's unused if not stored
+        _max_bet_config: u64,
     ) -> Result<()> {
         let global_state = &mut ctx.accounts.global_state;
         global_state.authority = ctx.accounts.authority.key();
         global_state.treasury_pda = ctx.accounts.treasury_pda_account.key();
-        // FIX: Access bump directly as a field, not with .get()
         global_state.treasury_bump = ctx.bumps.treasury_pda_account;
-        // FIX: Access bump directly as a field, not with .get()
         global_state.bump = ctx.bumps.global_state;
-        // `_max_bet_config` is not stored in GlobalState anymore, if it was intended to be
         Ok(())
     }
 
-    // pub fn place_bet(ctx: Context<PlaceBet>, guess: u8, amount: u64) -> Result<()> {
+    pub fn place_bet(ctx: Context<PlaceBet>, guess: u8, amount: u64) -> Result<()> {
+        require!(guess >= 1 && guess <= 6, ErrorCode::InvalidGuess);
+        require!(amount >= MIN_BET_LAMPORTS, ErrorCode::BetTooSmall);
+        require!(amount <= MAX_BET_LAMPORTS, ErrorCode::BetTooLarge);
     
-    //     require!(guess >= 1 && guess <= 6, ErrorCode::InvalidGuess);
-
-    //     // Enforce bet limits from constants
-    //     require!(amount >= MIN_BET_LAMPORTS, ErrorCode::BetTooSmall);
-    //     require!(amount <= MAX_BET_LAMPORTS, ErrorCode::BetTooLarge);
-
-    //     let bet_state = &mut ctx.accounts.bet_state;
-    //     // Ensure only one bet per (player, roll_state) combination is being initialized
-    //     require!(bet_state.amount == 0, ErrorCode::AlreadyBet);
-
-    //     // Check if there are any unclaimed winnings from a previous, settled roll.
-    //     if let Some(previous_bet_state_account) = &ctx.accounts.previous_bet_state {
-    //         let previous_bet = previous_bet_state_account.load()?;
-
-    //         let previous_roll_state_account = match &ctx.accounts.previous_roll_state {
-    //             Some(acc) => acc,
-    //             None => return Err(ErrorCode::InvalidPreviousRollAccount.into()),
-    //         };
-
-    //         require!(
-    //             previous_roll_state_account.key() == previous_bet.roll,
-    //             ErrorCode::InvalidPreviousRollAccount
-    //         );
-
-    //         // Check if the previous roll has revealed its result AND the previous bet is NOT claimed
-    //         if previous_roll_state_account.revealed && !previous_bet.claimed {
-    //             return Err(ErrorCode::PreviousBetUnclaimed.into());
-    //         }
-    //     }
-
-    //     bet_state.player = ctx.accounts.player.key();
-    //     bet_state.roll = ctx.accounts.roll_state.key();
-    //     bet_state.guess = guess;
-    //     bet_state.amount = amount;
-    //     bet_state.claimed = false;
-    //     bet_state.bump = *ctx.bumps.get("bet_state").unwrap();
-
-    //     // Transfer funds from player to treasury PDA
-    //     anchor_lang::solana_program::program::invoke(
-    //         &system_instruction::transfer(
-    //             ctx.accounts.player.key,
-    //             ctx.accounts.treasury_pda_account.key,
-    //             amount,
-    //         ),
-    //         &[
-    //             ctx.accounts.player.to_account_info(),
-    //             ctx.accounts.treasury_pda_account.to_account_info(),
-    //             ctx.accounts.system_program.to_account_info(),
-    //         ],
-    //     )?;
-
-    //     // Update the total_bets_amount on the RollState
-    //     let roll_state = &mut ctx.accounts.roll_state; // Get mutable reference to roll_state
-    //     roll_state.total_bets_amount = roll_state
-    //         .total_bets_amount
-    //         .checked_add(amount)
-    //         .ok_or(ErrorCode::MathOverflow)?;
-
-    //     emit!(BetPlaced {
-    //         user: ctx.accounts.player.key(), // User who placed the bet
-    //         amount,
-    //     });
-
-    //     Ok(())
-    // }
-
+        // Ensure previous bet is claimed if it exists
+        if let Some(previous_bet_state_account) = &ctx.accounts.previous_bet_state {
+            let previous_bet = previous_bet_state_account.load()?;
+    
+            let previous_roll_state_account = match &ctx.accounts.previous_roll_state {
+                Some(acc) => acc,
+                None => return Err(ErrorCode::InvalidPreviousRollAccount.into()),
+            };
+    
+            require!(
+                previous_roll_state_account.key() == previous_bet.roll_state_key,
+                ErrorCode::InvalidPreviousRollAccount
+            );
+    
+            if previous_roll_state_account.revealed && !previous_bet.redeemed.into() {
+                return Err(ErrorCode::PreviousBetUnclaimed.into());
+            }
+        }
+    
+        // Set up new bet state
+        let bet_state = &mut ctx.accounts.bet_state;
+        bet_state.player = ctx.accounts.player.key();
+        bet_state.roll_state_key = ctx.accounts.roll_state.key();
+        bet_state.guess = guess;
+        bet_state.amount = amount;
+        bet_state.has_won = false.into();
+        bet_state.redeemed = false.into();
+        bet_state.bump = *ctx.bumps.get("bet_state").unwrap();
+    
+        // Transfer lamports to treasury
+        anchor_lang::solana_program::program::invoke(
+            &system_instruction::transfer(
+                ctx.accounts.player.key,
+                ctx.accounts.treasury_pda_account.key,
+                amount,
+            ),
+            &[
+                ctx.accounts.player.to_account_info(),
+                ctx.accounts.treasury_pda_account.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+    
+        // Update total bets on the roll
+        let roll_state = &mut ctx.accounts.roll_state;
+        roll_state.total_bets_amount = roll_state
+            .total_bets_amount
+            .checked_add(amount)
+            .ok_or(ErrorCode::MathOverflow)?;
+    
+        emit!(BetPlaced {
+            user: ctx.accounts.player.key(),
+            amount,
+        });
+    
+        Ok(())
+    }
     
 }
-
 
 #[derive(Accounts)]
 pub struct InitializeContract<'info> {
     #[account(
         init,
         payer = authority,
-        // Space for GlobalState: 8 (discriminator) + 32 (Pubkey) + 32 (Pubkey) + 1 (u8) + 1 (u8) = 74 bytes
-        space = 8 + 32 + 32 + 1 + 1, // Ensure this matches actual struct size
+        space = 8 + 32 + 32 + 1 + 1,
         seeds = [b"global-state"],
         bump
     )]
@@ -125,7 +114,7 @@ pub struct InitializeContract<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8, // Just for Anchor's discriminator on TreasuryAccount
+        space = 8,
         seeds = [b"treasury", authority.key().as_ref()],
         bump
     )]
@@ -134,58 +123,52 @@ pub struct InitializeContract<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// #[derive(Accounts)]
-// pub struct PlaceBet<'info> {
-//     #[account(mut)]
-//     pub player: Signer<'info>,
+#[derive(Accounts)]
+pub struct PlaceBet<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
 
-//     #[account(mut, seeds = [b"global-state"], bump = global_state.bump)]
-//     pub global_state: Account<'info, GlobalState>,
+    #[account(mut, seeds = [b"global-state"], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
 
-//     #[account(mut, seeds = [b"roll", roll_state.randomness_account.as_ref()], bump = roll_state.bump)]
-//     pub roll_state: Account<'info, RollState>,
+    #[account(mut, seeds = [b"roll", roll_state.randomness_account.as_ref()], bump = roll_state.bump)]
+    pub roll_state: Account<'info, RollState>,
 
-//     #[account(
-//         init,
-//         payer = player,
-//         // New space calculation: sum of fields, NO 8-byte discriminator
-//         space = 32 + 32 + 1 + 8 + 1 + 1 + 1, // Player(32) + RollStateKey(32) + Guess(1) + Amount(8) + HasWon(1) + Redeemed(1) + Bump(1) = 76 bytes
-//         seeds = [b"bet", roll_state.key().as_ref(), player.key().as_ref()],
-//         bump
-//     )]
-//     pub bet_state: Account<'info, BetState>, // This Account is still what you interact with in the instruction
-    
+    #[account(
+        init,
+        payer = player,
+        space = 8 + std::mem::size_of::<BetState>(), // 8 bytes for discriminator
+        seeds = [b"bet", roll_state.key().as_ref(), player.key().as_ref()],
+        bump
+    )]
+    pub bet_state: Account<'info, BetState>,
 
-//     // The treasury PDA account for receiving funds
-//     #[account(
-//         mut,
-//         seeds = [b"treasury", global_state.authority.key().as_ref()],
-//         bump = global_state.treasury_bump
-//     )]
-//     /// CHECK: only SOL transferred
-//     pub treasury_pda_account: AccountInfo<'info>,
+    #[account(
+        mut,
+        seeds = [b"treasury", global_state.authority.key().as_ref()],
+        bump = global_state.treasury_bump
+    )]
+    /// CHECK: Treasury is just a SOL holding account
+    pub treasury_pda_account: AccountInfo<'info>,
 
-//     pub system_program: Program<'info, System>,
+    pub system_program: Program<'info, System>,
 
-//     // Optional accounts to check for previous unclaimed winnings.
-//     // The client will provide these if one exists and needs checking.
-//     // Using `AccountLoader` means the data is not deserialized by default.
-//     // You must call `.load()` on it in your instruction logic.
-//     #[account(has_one = player @ ErrorCode::PreviousBetDoesNotBelongToPlayer)]
-//     pub previous_bet_state: Option<AccountLoader<'info, BetState>>,
+    #[account(
+        owner = crate::ID,
+        has_one = player @ ErrorCode::PreviousBetDoesNotBelongToPlayer
+    )]
+    pub previous_bet_state: Option<AccountLoader<'info, BetState>>,
 
-//     // This account is required if `previous_bet_state` is provided, to verify its roll status.
-//     // It must be the RollState associated with the `previous_bet_state`.
-//     pub previous_roll_state: Option<Account<'info, RollState>>,
-// }
+    pub previous_roll_state: Option<Account<'info, RollState>>,
+}
 
-// Account definitions required for initialize_contract
+// Account definitions
 #[account]
 pub struct GlobalState {
     pub authority: Pubkey,
     pub treasury_pda: Pubkey,
-    pub treasury_bump: u8, // This field IS needed to store the bump seed for future PDA signing
-    pub bump: u8,          // GlobalState's own bump
+    pub treasury_bump: u8,
+    pub bump: u8,
 }
 
 #[account]
@@ -193,25 +176,19 @@ pub struct RollState {
     pub randomness_account: Pubkey,
     pub revealed: bool,
     pub result: Option<u8>,
-    pub total_bets_amount: u64, // Total amount bet on this specific roll
+    pub total_bets_amount: u64,
     pub bump: u8,
 }
 
-// #[account(zero_copy)]
-// #[repr(packed)]
-// pub struct BetState {
-//     pub player: Pubkey,        // 32 bytes
-//     pub roll_state_key: Pubkey, // 32 bytes
-//     pub guess: u8,             // 1 byte
-//     pub amount: u64,           // 8 bytes
-//     pub has_won: PodBool,      // 1 byte (from spl-pod)
-//     pub redeemed: PodBool,     // 1 byte (from spl-pod)
-//     pub bump: u8,              // 1 byte
-//     // Total: 32 + 32 + 1 + 8 + 1 + 1 + 1 = 76 bytes
-//     // Note: #[zero_copy] accounts do NOT have the 8-byte Anchor discriminator.
-//     // So the space calculation in `PlaceBet` will need to be adjusted.
-// }
-
+#[account]
+pub struct BetState {
+    pub player: Pubkey,       // 32 bytes
+    pub roll: Pubkey,         // 32 bytes
+    pub guess: u8,            // 1 byte
+    pub amount: u64,          // 8 bytes
+    pub claimed: bool,        // 1 byte
+    pub bump: u8,             // 1 byte (If you intend to store the bump in the account itself)
+}
 
 #[account]
 pub struct TreasuryAccount {

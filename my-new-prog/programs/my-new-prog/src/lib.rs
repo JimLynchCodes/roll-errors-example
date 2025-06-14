@@ -38,36 +38,35 @@ pub mod my_new_prog {
         require!(guess >= 1 && guess <= 6, ErrorCode::InvalidGuess);
         require!(amount >= MIN_BET_LAMPORTS, ErrorCode::BetTooSmall);
         require!(amount <= MAX_BET_LAMPORTS, ErrorCode::BetTooLarge);
-    
+
         // Ensure previous bet is claimed if it exists
         if let Some(previous_bet_state_account) = &ctx.accounts.previous_bet_state {
             let previous_bet = previous_bet_state_account.load()?;
-    
+
             let previous_roll_state_account = match &ctx.accounts.previous_roll_state {
                 Some(acc) => acc,
                 None => return Err(ErrorCode::InvalidPreviousRollAccount.into()),
             };
-    
+
             require!(
-                previous_roll_state_account.key() == previous_bet.roll_state_key,
+                previous_roll_state_account.key() == previous_bet.roll,
                 ErrorCode::InvalidPreviousRollAccount
             );
-    
-            if previous_roll_state_account.revealed && !previous_bet.redeemed.into() {
+
+            if previous_roll_state_account.revealed && !previous_bet.claimed.into() {
                 return Err(ErrorCode::PreviousBetUnclaimed.into());
             }
         }
-    
+
         // Set up new bet state
         let bet_state = &mut ctx.accounts.bet_state;
         bet_state.player = ctx.accounts.player.key();
-        bet_state.roll_state_key = ctx.accounts.roll_state.key();
+        bet_state.roll = ctx.accounts.roll_state.key();
         bet_state.guess = guess;
         bet_state.amount = amount;
-        bet_state.has_won = false.into();
-        bet_state.redeemed = false.into();
+        bet_state.claimed = false;
         bet_state.bump = *ctx.bumps.get("bet_state").unwrap();
-    
+
         // Transfer lamports to treasury
         anchor_lang::solana_program::program::invoke(
             &system_instruction::transfer(
@@ -81,19 +80,19 @@ pub mod my_new_prog {
                 ctx.accounts.system_program.to_account_info(),
             ],
         )?;
-    
+
         // Update total bets on the roll
         let roll_state = &mut ctx.accounts.roll_state;
         roll_state.total_bets_amount = roll_state
             .total_bets_amount
             .checked_add(amount)
             .ok_or(ErrorCode::MathOverflow)?;
-    
+
         emit!(BetPlaced {
             user: ctx.accounts.player.key(),
             amount,
         });
-    
+
         Ok(())
     }
     
@@ -123,7 +122,7 @@ pub struct InitializeContract<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Accounts)]
+#[derive(Accounts, Bumps)]
 pub struct PlaceBet<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
@@ -155,10 +154,12 @@ pub struct PlaceBet<'info> {
 
     #[account(
         owner = crate::ID,
-        has_one = player @ ErrorCode::PreviousBetDoesNotBelongToPlayer
+        has_one = player @ ErrorCode::PreviousBetDoesNotBelongToPlayer,
+        optional
     )]
     pub previous_bet_state: Option<AccountLoader<'info, BetState>>,
 
+    #[account(optional)]
     pub previous_roll_state: Option<Account<'info, RollState>>,
 }
 
@@ -180,7 +181,8 @@ pub struct RollState {
     pub bump: u8,
 }
 
-#[account]
+#[account(zero_copy)]
+#[derive(Default)]
 pub struct BetState {
     pub player: Pubkey,       // 32 bytes
     pub roll: Pubkey,         // 32 bytes

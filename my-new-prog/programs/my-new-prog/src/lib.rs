@@ -2,30 +2,14 @@ use anchor_lang::prelude::*;
 
 use anchor_lang::solana_program::system_instruction;
 use switchboard_on_demand::accounts::RandomnessAccountData; // For system program CPI
-// use spl_pod::PodBool;
 
-// pub mod accounts;      // This tells Rust to look for src/accounts/mod.rs
-// pub mod instructions;  // This tells Rust to look for src/instructions/mod.rs
-pub mod errors; // This tells Rust to look for src/errors.rs
-pub mod events; // This tells Rust to look for src/events.rs
-                // pub mod accounts;
+pub mod errors;
+pub mod events;
 
-// use crate::accounts::*;
 use crate::errors::ErrorCode;
 use crate::events::{
     BetCancelled, BetPlaced, DieRollTriggered, TreasuryWithdrawn, WinningsClaimed,
 };
-
-// pub mod bet_state_accounts;
-
-// --- HOW TO LOAD ACCOUNTS ---
-// You can use `use crate::accounts::*` to bring all public items
-// (which include your account structs) from the `accounts` module into scope.
-// use crate::accounts::*; // This brings GlobalState, TreasuryAccount, RollState, BetState into scope
-
-// You also need to explicitly use specific items from other modules
-// use crate::errors::ErrorCode;
-// use crate::events::{BetPlaced, BetCancelled, WinningsClaimed, DieRollTriggered, TreasuryWithdrawn, DieRollRevealed};
 
 declare_id!("FRb5eZnHH434Z5tQzoifEVL5MC8XCs4t3jXkkraszuZg");
 

@@ -1,21 +1,20 @@
+#![allow(deprecated)]
+
 use anchor_lang::prelude::*;
+// TODO: Update to use solana_system_interface crate when project dependencies are updated
 use anchor_lang::solana_program::system_instruction;
-use switchboard_on_demand::accounts::RandomnessAccountData;
 
 pub mod errors;
 pub mod events;
 
 use crate::errors::ErrorCode;
-use crate::events::{
-    BetCancelled, BetPlaced, DieRollTriggered, TreasuryWithdrawn, WinningsClaimed,
-};
+use crate::events::BetPlaced;
 
 declare_id!("FRb5eZnHH434Z5tQzoifEVL5MC8XCs4t3jXkkraszuZg");
 
 // Define constants for bet limits in lamports
 const MIN_BET_LAMPORTS: u64 = 1_000_000; // 0.001 SOL
 const MAX_BET_LAMPORTS: u64 = 100_000_000; // 0.1 SOL
-const MIN_POT_FOR_ROLL_LAMPORTS: u64 = 100_000_000; // 0.1 SOL
 
 #[program]
 pub mod my_new_prog {

@@ -4,7 +4,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
 // Import accounts and errors from your crate
-// use crate::accounts::{GlobalState, TreasuryAccount, RollState, BetState};
+use crate::{GlobalState, TreasuryAccount, RollState, BetState};
 use crate::errors::ErrorCode;
 use crate::events::BetPlaced;
 
@@ -23,11 +23,11 @@ pub struct PlaceBet<'info> {
     #[account(
         init,
         payer = player,
-        space = 8 + BetState::LEN,
+        space = 8 + std::mem::size_of::<BetState>(),
         seeds = [b"bet", roll_state.key().as_ref(), player.key().as_ref()],
         bump
     )]
-    pub bet_state: AccountLoader<'info, BetState>,
+    pub bet_state: Account<'info, BetState>,
     #[account(
         mut,
         seeds = [b"treasury", global_state.authority.key().as_ref()],
@@ -38,7 +38,7 @@ pub struct PlaceBet<'info> {
     pub system_program: Program<'info, System>,
 
     #[account(has_one = player @ ErrorCode::PreviousBetDoesNotBelongToPlayer)]
-    pub previous_bet_state: Option<AccountLoader<'info, BetState>>,
+    pub previous_bet_state: Option<Account<'info, BetState>>,
 
     pub previous_roll_state: Option<Account<'info, RollState>>,
 }
@@ -49,11 +49,11 @@ pub fn handler(ctx: Context<PlaceBet>, guess: u8, amount: u64) -> Result<()> {
     require!(amount >= MIN_BET_LAMPORTS, ErrorCode::BetTooSmall);
     require!(amount <= MAX_BET_LAMPORTS, ErrorCode::BetTooLarge);
 
-    let bet_state = &mut ctx.accounts.bet_state.load_mut()?;
+    let bet_state = &mut ctx.accounts.bet_state;
     require!(bet_state.amount == 0, ErrorCode::AlreadyBet);
 
     if let Some(previous_bet_state_account) = &ctx.accounts.previous_bet_state {
-        let previous_bet = previous_bet_state_account.load()?;
+        let previous_bet = previous_bet_state_account;
 
         let previous_roll_state_account = match &ctx.accounts.previous_roll_state {
             Some(acc) => acc,
@@ -65,7 +65,7 @@ pub fn handler(ctx: Context<PlaceBet>, guess: u8, amount: u64) -> Result<()> {
             ErrorCode::InvalidPreviousRollAccount
         );
 
-        if previous_roll_state_account.revealed && previous_bet.claimed == 0 { // Check claimed as u8
+        if previous_roll_state_account.revealed && !previous_bet.claimed {
             return Err(ErrorCode::PreviousBetUnclaimed.into());
         }
     }
@@ -74,7 +74,7 @@ pub fn handler(ctx: Context<PlaceBet>, guess: u8, amount: u64) -> Result<()> {
     bet_state.roll = ctx.accounts.roll_state.key();
     bet_state.guess = guess;
     bet_state.amount = amount;
-    bet_state.claimed = 0; // Initialize as 0 (false)
+    bet_state.claimed = false;
     bet_state.bump = ctx.bumps.bet_state;
 
     anchor_lang::solana_program::program::invoke(

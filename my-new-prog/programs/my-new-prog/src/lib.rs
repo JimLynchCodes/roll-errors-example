@@ -1,22 +1,20 @@
+#![allow(deprecated)]
+
 use anchor_lang::prelude::*;
+// TODO: Update to use solana_system_interface crate when project dependencies are updated
 use anchor_lang::solana_program::system_instruction;
-use switchboard_on_demand::accounts::RandomnessAccountData;
-use bytemuck::{Pod, Zeroable}; // Add these imports
 
 pub mod errors;
 pub mod events;
 
 use crate::errors::ErrorCode;
-use crate::events::{
-    BetCancelled, BetPlaced, DieRollTriggered, TreasuryWithdrawn, WinningsClaimed,
-};
+use crate::events::BetPlaced;
 
 declare_id!("FRb5eZnHH434Z5tQzoifEVL5MC8XCs4t3jXkkraszuZg");
 
 // Define constants for bet limits in lamports
 const MIN_BET_LAMPORTS: u64 = 1_000_000; // 0.001 SOL
 const MAX_BET_LAMPORTS: u64 = 100_000_000; // 0.1 SOL
-const MIN_POT_FOR_ROLL_LAMPORTS: u64 = 100_000_000; // 0.1 SOL
 
 #[program]
 pub mod my_new_prog {
@@ -41,7 +39,7 @@ pub mod my_new_prog {
     
         // Ensure previous bet is claimed if it exists
         if let Some(previous_bet_state_account) = &ctx.accounts.previous_bet_state {
-            let previous_bet = previous_bet_state_account.load()?;
+            let previous_bet = previous_bet_state_account;
     
             let previous_roll_state_account = match &ctx.accounts.previous_roll_state {
                 Some(acc) => acc,
@@ -49,11 +47,11 @@ pub mod my_new_prog {
             };
     
             require!(
-                previous_roll_state_account.key() == previous_bet.roll_state_key,
+                previous_roll_state_account.key() == previous_bet.roll,
                 ErrorCode::InvalidPreviousRollAccount
             );
     
-            if previous_roll_state_account.revealed && !previous_bet.redeemed.into() {
+            if previous_roll_state_account.revealed && !previous_bet.claimed {
                 return Err(ErrorCode::PreviousBetUnclaimed.into());
             }
         }
@@ -61,12 +59,11 @@ pub mod my_new_prog {
         // Set up new bet state
         let bet_state = &mut ctx.accounts.bet_state;
         bet_state.player = ctx.accounts.player.key();
-        bet_state.roll_state_key = ctx.accounts.roll_state.key();
+        bet_state.roll = ctx.accounts.roll_state.key();
         bet_state.guess = guess;
         bet_state.amount = amount;
-        bet_state.has_won = false.into();
-        bet_state.redeemed = false.into();
-        bet_state.bump = *ctx.bumps.get("bet_state").unwrap();
+        bet_state.claimed = false;
+        bet_state.bump = ctx.bumps.bet_state;
     
         // Transfer lamports to treasury
         anchor_lang::solana_program::program::invoke(
@@ -157,7 +154,7 @@ pub struct PlaceBet<'info> {
         owner = crate::ID,
         has_one = player @ ErrorCode::PreviousBetDoesNotBelongToPlayer
     )]
-    pub previous_bet_state: Option<AccountLoader<'info, BetState>>,
+    pub previous_bet_state: Option<Account<'info, BetState>>,
 
     pub previous_roll_state: Option<Account<'info, RollState>>,
 }

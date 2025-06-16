@@ -1,0 +1,27 @@
+[package]
+name = "my-new-prog"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "my_new_prog"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+
+[dependencies]
+anchor-lang = "0.31.1"
+switchboard-on-demand = "0.4.0"
+# REMOVE THIS LINE: bytemuck = { version = "1.14.0", features = ["derive"] }
+spl-pod = "0.5.1" # Add "derive" feature here if it's required for PodBool. Check spl-pod docs.
+# It's good practice to explicitly include solana-program to ensure its version and features are controlled:
+# solana-program = { version = "1.18.26" } # Make sure this matches your solana-cli version if possible.
+
